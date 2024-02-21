@@ -1,6 +1,8 @@
 params.assemblies = "$projectDir/data/*.gff"
+params.data_dir = "$projectDir/data"
 params.scripts_dir = "$projectDir/scripts"
 params.out_dir = "$projectDir/results"
+params.mcl_inflation = 1.5
 
 process makeProteinSeqFiles {
     input:
@@ -47,6 +49,38 @@ process blastProteins {
     """
 }
 
+process mergeBlastResults {
+    input:
+    path blast_results
+
+    output:
+    path "merged_blast_results.tsv"
+
+    script:
+    """
+    cat ${blast_results} > merged_blast_results.tsv
+    """
+}
+
+process clusterProteins {
+    cpus 8
+
+    input:
+    path blast_results
+
+    output:
+    path "mcl_cluster_seqs"
+
+    script:
+    """
+    python3 ${params.scripts_dir}/make_bitscore_graph.py -i $blast_results -o bitscore_graph.abc
+    mcl bitscore_graph.abc --abc -I ${params.mcl_inflation} -te ${task.cpus} -o mcl_clusters.tsv
+    python3 ${params.scripts_dir}/construct_orthogroup_table.py -A "${params.data_dir}/" -i mcl_clusters.tsv -o raw_orthogroup_table.tsv
+    mkdir mcl_cluster_seqs
+    python3 ${params.scripts_dir}/extract_orthogroup_sequences.py -A "${params.data_dir}/" -O mcl_cluster_seqs/ -g raw_orthogroup_table.tsv -s nucl
+    """
+}
+
 workflow {
     Channel
         .fromPath(params.assemblies)
@@ -61,5 +95,7 @@ workflow {
         .unique()
         .first() // make value channel to BLAST all sequence files against database
     blast_ch = blastProteins(seqs_ch, db_path)
-    blast_ch.view()
+    merged_blast_ch = mergeBlastResults(blast_ch.collect())
+    mlc_ch = clusterProteins(merged_blast_ch)
+    mlc_ch.view()
 }

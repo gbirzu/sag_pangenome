@@ -5,8 +5,8 @@
 *.ipynb_checkpoints
 
 # data and figures
-data/
-results/
+data/*
+results/*
 *.pdf
 
 # Mac dir files

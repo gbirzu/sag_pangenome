@@ -319,7 +319,11 @@ class PangenomeMap:
             return contig_seqs_df
 
     def get_sag_ids(self):
-        return np.array([col for col in self.og_table.columns if 'Uncmic' in col])
+        col_names = self.og_table.columns.values
+        avg_length_idx = np.where(col_names == 'avg_length')[0][0] # assume "avg_length" is last non-SAG column
+        assert np.sum(['Uncmic' not in c for c in col_names[avg_length_idx + 1:]]) == 0 # check that all columns start with Uncmic
+        return col_names[avg_length_idx + 1:]
+        #return np.array([col for col in self.og_table.columns if 'Uncmic' in col])
 
     def get_og_contig_location(self, og_id=None, gene_id=None, sag_id=None):
         if og_id is not None:
