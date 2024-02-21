@@ -4,12 +4,12 @@ import pickle
 import glob
 import utils 
 import seq_processing_utils as seq_utils
-from Bio.SeqRecord import SeqRecord
 
 def extract_seq_records(annotations_df, contig_records, type='nucl', format='genes'):
     seq_records = {}
     if format == 'genes':
-        for gene_id in annotations_df.index:
+        gene_idx = annotations_df.loc[annotations_df['type'] == 'CDS', :].index # include CDS only
+        for gene_id in gene_idx: 
             contig_id = annotations_df.loc[gene_id, 'contig']
             contig_seq = contig_records[contig_id]
             x_start, x_end = annotations_df.loc[gene_id, ['start_coord', 'end_coord']].astype(int)
@@ -18,7 +18,8 @@ def extract_seq_records(annotations_df, contig_records, type='nucl', format='gen
                 gene_seq = gene_seq.reverse_complement()
             if type == 'prot':
                 gene_seq = gene_seq.translate(table=11)
-            seq_records[gene_id] = SeqRecord(gene_seq, id=gene_id, description='')
+            seq_records[gene_id] = seq_utils.make_SeqRecord(gene_seq, id=gene_id, description='')
+
     elif format == 'contigs':
         for contig_id in contig_records:
             seq_records[contig_id] = contig_records[contig_id]
