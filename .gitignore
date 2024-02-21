@@ -1,0 +1,17 @@
+# Python intermediate files
+*__pycache__/
+*.py[cod]
+*$py.class
+*.ipynb_checkpoints
+
+# data and figures
+data/
+results/
+*.pdf
+
+# Mac dir files
+.DS_Store
+
+# Nextflow files
+.netflow*
+work/
