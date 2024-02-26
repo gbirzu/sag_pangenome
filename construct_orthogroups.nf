@@ -20,7 +20,6 @@ process makeProteinSeqFiles {
 
 process makeBlastDatabase {
     input:
-    //tuple val(sample_id), path(proteins)
     path(genes_files)
 
     output:
@@ -69,7 +68,7 @@ process clusterProteins {
     path blast_results
 
     output:
-    path "mcl_cluster_seqs"
+    tuple path("mcl_cluster_seqs"), path("raw_orthogroup_table.tsv")
 
     script:
     """
@@ -80,6 +79,49 @@ process clusterProteins {
     python3 ${params.scripts_dir}/extract_orthogroup_sequences.py -A "${params.data_dir}/" -O mcl_cluster_seqs/ -g raw_orthogroup_table.tsv -s nucl
     """
 }
+
+process filterClusterLengths {
+    input:
+    tuple path(mcl_dir), path(orthogroup_table)
+
+    output:
+    path "filtered_cluster_seqs"
+
+    script:
+    """
+    mkdir -p filtered_cluster_seqs
+    python3 ${params.scripts_dir}/filter_sequence_fragments.py -I $mcl_dir/ -O filtered_cluster_seqs/ -g ${orthogroup_table} -o filtered_orthogroup_table.tsv
+    """
+}
+
+process getSequenceFiles {
+    input:
+    path seqs_dir
+
+    output:
+    path "seq_files.txt"
+
+    script:
+    """
+    echo "${seqs_dir}"
+    find ${seqs_dir} -name '*.fna' > seq_files.txt
+    """
+
+}
+
+process batchSequenceAlignments {
+    input:
+    val indices
+
+    script:
+    """
+    for i in ${indices.join(' ')}
+    do
+        echo \$i
+    done
+    """
+}
+
 
 workflow {
     Channel
@@ -96,6 +138,15 @@ workflow {
         .first() // make value channel to BLAST all sequence files against database
     blast_ch = blastProteins(seqs_ch, db_path)
     merged_blast_ch = mergeBlastResults(blast_ch.collect())
-    mlc_ch = clusterProteins(merged_blast_ch)
-    mlc_ch.view()
+    mcl_ch = clusterProteins(merged_blast_ch)
+    seq_clusters_ch = filterClusterLengths(mcl_ch)
+    //Channel
+    //    .of(1..100)
+    //    | buffer(size: 10, remainder: true)
+    //    | batchSequenceAlignments
+    seq_clusters_ch.view()
+    seq_files_ch = getSequenceFiles(seq_clusters_ch)
+    seq_files_ch.view()
+
+    batchSequenceAlignments(Channel.of(1..100).buffer(size: 10, remainder: true))
 }
