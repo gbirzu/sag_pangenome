@@ -103,24 +103,57 @@ process getSequenceFiles {
 
     script:
     """
-    echo "${seqs_dir}"
-    find ${seqs_dir} -name '*.fna' > seq_files.txt
+    find -L "\$PWD/${seqs_dir}" -name '*.fna' > seq_files.txt
     """
-
 }
 
 process batchSequenceAlignments {
+    cpus 1
+    publishDir "results/_aln_results", pattern: "*_aln.fna"
+
     input:
-    val indices
+    path in_files
 
     script:
     """
-    for i in ${indices.join(' ')}
+    for f_in in ${in_files.join(' ')}
     do
-        echo \$i
+        num_seqs=\$(grep '^>' \$f_in | wc -l)
+        if [ \$num_seqs -gt 1 ]
+        then
+            echo \$f_in
+            out_aa=\$(echo \$f_in | awk -F'/' '{print \$NF}' | awk -F'.' '{print \$1".faa"}')
+            python3 ${params.scripts_dir}/process_alignments.py -i \$f_in -o \$out_aa
+            out_aa_aln=\$(echo \$f_in | awk -F'/' '{print \$NF}' | awk -F'.' '{print \$1"_aln.faa"}')
+            mafft --thread ${task.cpus} --quiet --reorder --auto \${out_aa} > \${out_aa_aln}
+            output_file=\$(echo \$f_in | awk -F'/' '{print \$NF}' | awk -F'.' '{print \$1"_aln.fna"}')
+            python3 ${params.scripts_dir}/process_alignments.py -i \${out_aa_aln} -n \${f_in} -o \${output_file} -d backward
+
+            if [ \$? -eq 0 ]
+            then
+                # Clean up
+                rm -f \${out_aa}
+                rm -f \${out_aa_aln}
+            fi
+        fi
     done
     """
 }
+
+process runCodonAwareAligner {
+    input:
+    path f_seqs
+    //tuple val(sample_id), path(f_seqs)
+
+    output:
+    path f_aln
+
+    script:
+    """
+    f_aln="${f_seqs.baseName}_aln.fna"
+    touch \$f_aln 
+    """
+    }
 
 
 workflow {
@@ -146,7 +179,6 @@ workflow {
     //    | batchSequenceAlignments
     seq_clusters_ch.view()
     seq_files_ch = getSequenceFiles(seq_clusters_ch)
-    seq_files_ch.view()
-
-    batchSequenceAlignments(Channel.of(1..100).buffer(size: 10, remainder: true))
+    seq_files_ch.splitCsv().map { row -> file(row[0]) }.buffer(size: 100, skip: 2000, remainder: true) | batchSequenceAlignments
+    //seq_files_ch.splitCsv().map { row -> tuple("${file(row[0]).baseName}", file(row[0])) }.buffer(size: 10, remainder: true) | runCodonAwareAligner
 }
