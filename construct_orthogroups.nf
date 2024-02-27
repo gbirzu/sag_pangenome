@@ -107,15 +107,15 @@ process getSequenceFiles {
     """
 }
 
-process batchSequenceAlignments {
-    cpus 1
-    publishDir "results/_aln_results", pattern: "*_aln.fna"
+process batchAlignSeqsAndConstructTrees {
+    cpus 2
 
     input:
     path in_files
 
     script:
     """
+    mkdir -p $projectDir/results/_aln_results
     for f_in in ${in_files.join(' ')}
     do
         num_seqs=\$(grep '^>' \$f_in | wc -l)
@@ -126,34 +126,27 @@ process batchSequenceAlignments {
             python3 ${params.scripts_dir}/process_alignments.py -i \$f_in -o \$out_aa
             out_aa_aln=\$(echo \$f_in | awk -F'/' '{print \$NF}' | awk -F'.' '{print \$1"_aln.faa"}')
             mafft --thread ${task.cpus} --quiet --reorder --auto \${out_aa} > \${out_aa_aln}
-            output_file=\$(echo \$f_in | awk -F'/' '{print \$NF}' | awk -F'.' '{print \$1"_aln.fna"}')
-            python3 ${params.scripts_dir}/process_alignments.py -i \${out_aa_aln} -n \${f_in} -o \${output_file} -d backward
+            out_aln=\$(echo \$f_in | awk -F'/' '{print \$NF}' | awk -F'.' '{print \$1"_aln.fna"}')
+            python3 ${params.scripts_dir}/process_alignments.py -i \${out_aa_aln} -n \${f_in} -o \${out_aln} -d backward
+            out_tree=\$(echo \$f_in | awk -F'/' '{print \$NF}' | awk -F'.' '{print \$1"_tree.nwk"}')
+            FastTree -nj -noml -nt \${out_aln} > \${out_tree}
 
-            if [ \$? -eq 0 ]
-            then
-                # Clean up
-                rm -f \${out_aa}
-                rm -f \${out_aa_aln}
-            fi
         fi
     done
+
+    # Clean up
+    if [ \$? -eq 0 ]
+    then
+        rm -f *.faa
+        
+        # Manually copy files
+        # Note: publishDir doesn't work with bash scripts
+        cp *_aln.fna $projectDir/results/_aln_results/
+        cp *_tree.nwk $projectDir/results/_aln_results/
+    fi
+
     """
 }
-
-process runCodonAwareAligner {
-    input:
-    path f_seqs
-    //tuple val(sample_id), path(f_seqs)
-
-    output:
-    path f_aln
-
-    script:
-    """
-    f_aln="${f_seqs.baseName}_aln.fna"
-    touch \$f_aln 
-    """
-    }
 
 
 workflow {
@@ -173,12 +166,12 @@ workflow {
     merged_blast_ch = mergeBlastResults(blast_ch.collect())
     mcl_ch = clusterProteins(merged_blast_ch)
     seq_clusters_ch = filterClusterLengths(mcl_ch)
-    //Channel
-    //    .of(1..100)
-    //    | buffer(size: 10, remainder: true)
-    //    | batchSequenceAlignments
-    seq_clusters_ch.view()
+
     seq_files_ch = getSequenceFiles(seq_clusters_ch)
-    seq_files_ch.splitCsv().map { row -> file(row[0]) }.buffer(size: 100, skip: 2000, remainder: true) | batchSequenceAlignments
-    //seq_files_ch.splitCsv().map { row -> tuple("${file(row[0]).baseName}", file(row[0])) }.buffer(size: 10, remainder: true) | runCodonAwareAligner
+    seq_files_ch
+        .splitCsv()
+        .map { row -> file(row[0]) }
+        .buffer(size: 10, skip: 1000, remainder: true)
+        .set { batched_files_ch }
+    batchAlignSeqsAndConstructTrees(batched_files_ch)
 }
