@@ -91,6 +91,9 @@ process filterClusterLengths {
     """
     mkdir -p filtered_cluster_seqs
     python3 ${params.scripts_dir}/filter_sequence_fragments.py -I $mcl_dir/ -O filtered_cluster_seqs/ -g ${orthogroup_table} -o filtered_orthogroup_table.tsv
+
+    mkdir -p $projectDir/results/_filtered_cluster_seqs
+    cp filtered_cluster_seqs/*.fna $projectDir/results/_filtered_cluster_seqs
     """
 }
 
@@ -140,11 +143,79 @@ process batchAlignSeqsAndConstructTrees {
         rm -f *.faa
         
         # Manually copy files
-        # Note: publishDir doesn't work with bash scripts
+        # Note: publishDir doesn't work within bash script env
         cp *_aln.fna $projectDir/results/_aln_results/
         cp *_tree.nwk $projectDir/results/_aln_results/
     fi
 
+    """
+}
+
+process batchSplitDeepBranches {
+    cpus 2
+
+    input:
+    path tree_files
+
+    script:
+    """
+    seqs_dir=${params.out_dir}/_filtered_cluster_seqs/
+    for f_tree in ${tree_files.join(' ')}
+    do
+        og_id=\$(echo \$f_tree | awk -F'/' '{print \$NF}' | awk -F'_' '{print \$1"_"\$2}')
+        out_file="\${og_id}_subclusters.txt"
+        updates_file="\${og_id}_og_updates.dat"
+        python3 ${params.scripts_dir}/pg_split_deep_branches.py -S \${seqs_dir} -i \${f_tree} -f \${out_file} -u \${updates_file} -b 0.3 -s nucl -e fna -p sscs
+
+        subcluster_list=(\$(cat \${out_file}))
+        if [ \${#subcluster_list[*]} -gt 0 ]
+        then
+            has_subclusters=1
+        else
+            has_subclusters=0
+        fi
+
+        i_subcluster=0
+        while [ \${#subcluster_list[*]} -gt 0 ]
+        do
+            subcluster_id=\${subcluster_list[\${i_subcluster}]}
+            f_subcluster=\${seqs_dir}\${subcluster_id}.fna
+            num_seqs=\$(cat \${f_subcluster} | grep '^>' | wc -l)
+
+            if [ "\${num_seqs}" -gt 1 ]
+            then
+                out_aa="\${subcluster_id}.faa"
+                python3 ${params.scripts_dir}/process_alignments.py -i \$f_subcluster -o \$out_aa
+                out_aa_aln="\${subcluster_id}_aln.faa"
+                mafft --thread ${task.cpus} --quiet --reorder --auto \${out_aa} > \${out_aa_aln}
+                out_aln="\${subcluster_id}_aln.fna"
+                python3 ${params.scripts_dir}/process_alignments.py -i \${out_aa_aln} -n \${f_subcluster} -o \${out_aln} -d backward
+                out_tree="\${subcluster_id}_tree.nwk"
+                FastTree -nj -noml -nt \${out_aln} > \${out_tree}
+
+                tail -n +2 \${out_file} > \${og_id}_temp.txt
+                mv \${og_id}_temp.txt \${out_file}
+                python3 ${params.scripts_dir}/pg_split_deep_branches.py -S \${seqs_dir} -i \${out_tree} -f \${out_file} -u \${updates_file} -b 0.3 -s nucl -e fna -p sscs
+
+                # Clean up
+                rm -f \${out_aa}
+                rm -f \${out_aa_aln}
+            else
+                tail -n +2 \${out_file} > \${og_id}_temp.txt
+                mv \${og_id}_temp.txt \${out_file}
+            fi
+
+            subcluster_list=(\$(cat \${out_file}))
+        done
+
+        # Clean up
+        rm -f \${out_file}
+        if [ \${has_subclusters} -eq 0 ]
+        then
+            rm -f \${updates_file}
+        fi
+
+    done
     """
 }
 
@@ -174,4 +245,9 @@ workflow {
         .buffer(size: 10, skip: 1000, remainder: true)
         .set { batched_files_ch }
     batchAlignSeqsAndConstructTrees(batched_files_ch)
+
+    Channel
+        .fromPath("${params.out_dir}/_aln_results/*.nwk")
+        .set { tree_files_ch }
+    batchSplitDeepBranches(tree_files_ch.buffer(size: 10, remainder: true))
 }

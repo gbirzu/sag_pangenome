@@ -172,6 +172,7 @@ def append_to_updates_file(f_updates, subcluster_id, gene_ids):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('-D', '--data_dir', help='Main directory containing pangenome output.')
+    parser.add_argument('-S', '--seqs_dir', help='Directory containing orthogroup sequences.')
     parser.add_argument('-b', '--branch_cutoff', default=0.3, type=float, help='Cutoff length for long branches.')
     parser.add_argument('-e', '--ext', default='fna', help='Sequence files extension.')
     parser.add_argument('-f', '--subclusters_file', default=None, help='Text file where subcluster IDs are saved.')
@@ -183,7 +184,8 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     if args.input_file:
-        cluster_id = args.input_file.split('/')[-1].replace('_aln.nwk', '')
+        #cluster_id = args.input_file.split('/')[-1].replace('_aln.nwk', '')
+        cluster_id = args.input_file.split('/')[-1].replace('_tree.nwk', '')
         tree = ete3.PhyloTree(args.input_file, format=0)
         tree_subclusters = split_deep_branches(tree, args.branch_cutoff)
 
@@ -192,7 +194,7 @@ if __name__ == '__main__':
                 aln_subclusters = label_subclusters(tree_subclusters, cluster_id)
                 for sog_id in aln_subclusters:
                     gene_ids = aln_subclusters[sog_id]
-                    write_subcluster_seqs(gene_ids, sog_id, cluster_id, f'{args.data_dir}filtered_orthogroups/', seq_type=args.seq_type)
+                    write_subcluster_seqs(gene_ids, sog_id, cluster_id, f'{args.seqs_dir}', seq_type=args.seq_type)
                     out_handle.write(f'{sog_id}\n')
 
                     # Add single sequence clusters to updates file
