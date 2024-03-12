@@ -85,15 +85,15 @@ process filterClusterLengths {
     tuple path(mcl_dir), path(orthogroup_table)
 
     output:
-    path "filtered_cluster_seqs"
+    path "filtered_orthogroups"
 
     script:
     """
-    mkdir -p filtered_cluster_seqs
-    python3 ${params.scripts_dir}/filter_sequence_fragments.py -I $mcl_dir/ -O filtered_cluster_seqs/ -g ${orthogroup_table} -o filtered_orthogroup_table.tsv
+    mkdir -p filtered_orthogroups
+    python3 ${params.scripts_dir}/filter_sequence_fragments.py -I $mcl_dir/ -O filtered_orthogroups/ -g ${orthogroup_table} -o filtered_orthogroup_table.tsv
 
-    mkdir -p $projectDir/results/_filtered_cluster_seqs
-    cp filtered_cluster_seqs/*.fna $projectDir/results/_filtered_cluster_seqs
+    mkdir -p $projectDir/results/filtered_orthogroups
+    #cp filtered_cluster_seqs/*.fna $projectDir/results/filtered_orthogroups
     """
 }
 
@@ -116,22 +116,29 @@ process batchAlignSeqsAndConstructTrees {
     input:
     path in_files
 
+    output:
+    path "_aln_results"
+
     script:
     """
     mkdir -p $projectDir/results/_aln_results
+    mkdir -p _aln_results
     for f_in in ${in_files.join(' ')}
     do
         num_seqs=\$(grep '^>' \$f_in | wc -l)
         if [ \$num_seqs -gt 1 ]
         then
-            echo \$f_in
-            out_aa=\$(echo \$f_in | awk -F'/' '{print \$NF}' | awk -F'.' '{print \$1".faa"}')
+            og_id=\$(echo \$f_in | awk -F'/' '{print \$NF}' | awk -F'.' '{print \$1}')
+            out_aa="\${og_id}.faa"
             python3 ${params.scripts_dir}/process_alignments.py -i \$f_in -o \$out_aa
-            out_aa_aln=\$(echo \$f_in | awk -F'/' '{print \$NF}' | awk -F'.' '{print \$1"_aln.faa"}')
+
+            out_aa_aln="\${og_id}_aln.faa"
             mafft --thread ${task.cpus} --quiet --reorder --auto \${out_aa} > \${out_aa_aln}
-            out_aln=\$(echo \$f_in | awk -F'/' '{print \$NF}' | awk -F'.' '{print \$1"_aln.fna"}')
+
+            out_aln="\${og_id}_aln.fna"
             python3 ${params.scripts_dir}/process_alignments.py -i \${out_aa_aln} -n \${f_in} -o \${out_aln} -d backward
-            out_tree=\$(echo \$f_in | awk -F'/' '{print \$NF}' | awk -F'.' '{print \$1"_tree.nwk"}')
+
+            out_tree="\${og_id}_tree.nwk"
             FastTree -nj -noml -nt \${out_aln} > \${out_tree}
 
         fi
@@ -147,7 +154,6 @@ process batchAlignSeqsAndConstructTrees {
         cp *_aln.fna $projectDir/results/_aln_results/
         cp *_tree.nwk $projectDir/results/_aln_results/
     fi
-
     """
 }
 
@@ -159,7 +165,7 @@ process batchSplitDeepBranches {
 
     script:
     """
-    seqs_dir=${params.out_dir}/_filtered_cluster_seqs/
+    seqs_dir=${params.out_dir}/filtered_orthogroups/
     for f_tree in ${tree_files.join(' ')}
     do
         og_id=\$(echo \$f_tree | awk -F'/' '{print \$NF}' | awk -F'_' '{print \$1"_"\$2}')
@@ -246,8 +252,8 @@ workflow {
         .set { batched_files_ch }
     batchAlignSeqsAndConstructTrees(batched_files_ch)
 
-    Channel
-        .fromPath("${params.out_dir}/_aln_results/*.nwk")
-        .set { tree_files_ch }
-    batchSplitDeepBranches(tree_files_ch.buffer(size: 10, remainder: true))
+    //Channel
+    //    .fromPath("${params.out_dir}/_aln_results/*.nwk")
+    //    .set { tree_files_ch }
+    //batchSplitDeepBranches(tree_files_ch.buffer(size: 10, remainder: true))
 }
