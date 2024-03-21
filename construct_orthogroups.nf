@@ -85,7 +85,7 @@ process filterClusterLengths {
     tuple path(mcl_dir), path(orthogroup_table)
 
     output:
-    path "filtered_orthogroups"
+    tuple path("filtered_orthogroups"), path("filtered_orthogroup_table.tsv")
 
     script:
     """
@@ -151,89 +151,28 @@ process batchAlignSeqsAndConstructTrees {
     """
 }
 
-process batchSplitDeepBranches {
-    cpus 2
-
-    input:
-    path tree_files
-
-    script:
-    """
-    seqs_dir=${params.out_dir}/filtered_orthogroups/
-    for f_tree in ${tree_files.join(' ')}
-    do
-        og_id=\$(echo \$f_tree | awk -F'/' '{print \$NF}' | awk -F'_' '{print \$1"_"\$2}')
-        out_file="\${og_id}_subclusters.txt"
-        updates_file="\${og_id}_og_updates.dat"
-        python3 ${params.scripts_dir}/pg_split_deep_branches.py -S \${seqs_dir} -i \${f_tree} -f \${out_file} -u \${updates_file} -b 0.3 -s nucl -e fna -p sscs
-
-        subcluster_list=(\$(cat \${out_file}))
-        if [ \${#subcluster_list[*]} -gt 0 ]
-        then
-            has_subclusters=1
-        else
-            has_subclusters=0
-        fi
-
-        i_subcluster=0
-        while [ \${#subcluster_list[*]} -gt 0 ]
-        do
-            subcluster_id=\${subcluster_list[\${i_subcluster}]}
-            f_subcluster=\${seqs_dir}\${subcluster_id}.fna
-            num_seqs=\$(cat \${f_subcluster} | grep '^>' | wc -l)
-
-            if [ "\${num_seqs}" -gt 1 ]
-            then
-                out_aa="\${subcluster_id}.faa"
-                python3 ${params.scripts_dir}/process_alignments.py -i \$f_subcluster -o \$out_aa
-                out_aa_aln="\${subcluster_id}_aln.faa"
-                mafft --thread ${task.cpus} --quiet --reorder --auto \${out_aa} > \${out_aa_aln}
-                out_aln="\${subcluster_id}_aln.fna"
-                python3 ${params.scripts_dir}/process_alignments.py -i \${out_aa_aln} -n \${f_subcluster} -o \${out_aln} -d backward
-                out_tree="\${subcluster_id}_tree.nwk"
-                FastTree -nj -noml -nt \${out_aln} > \${out_tree}
-
-                tail -n +2 \${out_file} > \${og_id}_temp.txt
-                mv \${og_id}_temp.txt \${out_file}
-                python3 ${params.scripts_dir}/pg_split_deep_branches.py -S \${seqs_dir} -i \${out_tree} -f \${out_file} -u \${updates_file} -b 0.3 -s nucl -e fna -p sscs
-
-                # Clean up
-                rm -f \${out_aa}
-                rm -f \${out_aa_aln}
-            else
-                tail -n +2 \${out_file} > \${og_id}_temp.txt
-                mv \${og_id}_temp.txt \${out_file}
-            fi
-
-            subcluster_list=(\$(cat \${out_file}))
-        done
-
-        # Clean up
-        rm -f \${out_file}
-        if [ \${has_subclusters} -eq 0 ]
-        then
-            rm -f \${updates_file}
-        fi
-
-    done
-    """
-}
 
 process splitDeepBranches {
     cpus 2
+    //publishDir "${params.out_dir}"
 
     input:
     path _aln_results
     path filtered_orthogroups
 
+    output:
+    path "*_updates.dat", optional: true
+
     script:
     """
+    #mkdir -p update_files
     tree_files=(\$(find -L _aln_results -name '*.nwk'))
     for f_tree in \${tree_files[*]}
     do
         echo \$f_tree
         og_id=\$(echo \$f_tree | awk -F'/' '{print \$NF}' | awk -F'_' '{print \$1"_"\$2}')
         out_file="\${og_id}_subclusters.txt"
+        #updates_file="update_files/\${og_id}_og_updates.dat"
         updates_file="\${og_id}_og_updates.dat"
         python3 ${params.scripts_dir}/pg_split_deep_branches.py -S filtered_orthogroups/ -i \${f_tree} -f \${out_file} -u \${updates_file} -b 0.3 -s nucl -e fna -p sscs
 
@@ -301,7 +240,29 @@ process splitDeepBranches {
     then
         cp *_aln.fna _aln_results
     fi
+
+    mkdir -p "${params.out_dir}/_aln_results"
+    cp _aln_results/* "${params.out_dir}/_aln_results"
     """
+}
+
+
+process updateOrthogroupTable {
+    cpus 2
+    publishDir "${params.out_dir}", mode: "copy"
+
+    input:
+    path update_files
+    path "filtered_orthogroup_table.tsv"
+
+    output:
+    path "orthogroup_table.tsv"
+
+    script:
+    """
+    python3 ${params.scripts_dir}/pg_update_og_table.py -U ./ -i filtered_orthogroup_table.tsv -o orthogroup_table.tsv -v --update_orthogroup_assignments
+    """
+
 }
 
 
@@ -322,19 +283,19 @@ workflow {
     merged_blast_ch = mergeBlastResults(blast_ch.collect())
     mcl_ch = clusterProteins(merged_blast_ch)
     seq_clusters_ch = filterClusterLengths(mcl_ch)
+    seqs_dir_ch = seq_clusters_ch.map { it[0] }
+    orthogroup_table_ch = seq_clusters_ch.map { it[1] }
 
-    seq_files_ch = getSequenceFiles(seq_clusters_ch)
+    seq_files_ch = getSequenceFiles(seqs_dir_ch)
     seq_files_ch
         .splitCsv()
         .map { row -> file(row[0]) }
         .buffer(size: 10, skip: 1000, remainder: true)
         .set { batched_files_ch }
     aln_ch = batchAlignSeqsAndConstructTrees(batched_files_ch)
-    aln_ch.view()
-    splitDeepBranches(aln_ch, seq_clusters_ch)
+    updates_ch = splitDeepBranches(aln_ch, seqs_dir_ch)
+    updates_ch.view()
 
-    //Channel
-    //    .fromPath("${params.out_dir}/_aln_results/*.nwk")
-    //    .set { tree_files_ch }
-    //batchSplitDeepBranches(tree_files_ch.buffer(size: 10, remainder: true))
+    updateOrthogroupTable(updates_ch.collect(), orthogroup_table_ch)
+
 }
