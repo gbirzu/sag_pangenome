@@ -3,6 +3,8 @@ params.data_dir = "$projectDir/data"
 params.scripts_dir = "$projectDir/scripts"
 params.out_dir = "$projectDir/results"
 params.mcl_inflation = 1.5
+params.parallel_alns = 200
+params.test = false
 
 process makeProteinSeqFiles {
     input:
@@ -154,7 +156,6 @@ process batchAlignSeqsAndConstructTrees {
 
 process splitDeepBranches {
     cpus 2
-    //publishDir "${params.out_dir}"
 
     input:
     path _aln_results
@@ -249,7 +250,7 @@ process splitDeepBranches {
 
 process updateOrthogroupTable {
     cpus 2
-    publishDir "${params.out_dir}", mode: "copy"
+    publishDir "${params.out_dir}", mode: "copy", overwrite: true
 
     input:
     path update_files
@@ -260,7 +261,7 @@ process updateOrthogroupTable {
 
     script:
     """
-    python3 ${params.scripts_dir}/pg_update_og_table.py -U ./ -i filtered_orthogroup_table.tsv -o orthogroup_table.tsv -v --update_orthogroup_assignments
+    python3 ${params.scripts_dir}/update_og_table.py -U ./ -i filtered_orthogroup_table.tsv -o orthogroup_table.tsv -v --update_orthogroup_assignments
     """
 
 }
@@ -283,19 +284,30 @@ workflow {
     merged_blast_ch = mergeBlastResults(blast_ch.collect())
     mcl_ch = clusterProteins(merged_blast_ch)
     seq_clusters_ch = filterClusterLengths(mcl_ch)
+
     seqs_dir_ch = seq_clusters_ch.map { it[0] }
     orthogroup_table_ch = seq_clusters_ch.map { it[1] }
-
     seq_files_ch = getSequenceFiles(seqs_dir_ch)
-    seq_files_ch
-        .splitCsv()
-        .map { row -> file(row[0]) }
-        .buffer(size: 10, skip: 1000, remainder: true)
-        .set { batched_files_ch }
+
+    if ( params.test ) { 
+        // Make small batches in test mode
+        seq_files_ch
+            .splitCsv()
+            .map { row -> file(row[0]) }
+            .buffer(size: 10, skip: 1000, remainder: true)
+            .set { batched_files_ch }
+    }
+    else {
+        // Batch alignment files to reduce job submission overhead
+        seq_files_ch
+            .splitCsv()
+            .map { row -> file(row[0]) }
+            .buffer(size: params.parallel_alns, remainder: true)
+            .set { batched_files_ch }
+    }
+
     aln_ch = batchAlignSeqsAndConstructTrees(batched_files_ch)
     updates_ch = splitDeepBranches(aln_ch, seqs_dir_ch)
-    updates_ch.view()
-
     updateOrthogroupTable(updates_ch.collect(), orthogroup_table_ch)
 
 }
