@@ -35,7 +35,7 @@ process makeBlastDatabase {
 }
 
 process blastProteins {
-    cpus 4
+    label 'large_task'
 
     input:
     tuple(val(sample_id), path(proteins))
@@ -64,7 +64,7 @@ process mergeBlastResults {
 }
 
 process clusterProteins {
-    cpus 8
+    label 'large_task'
 
     input:
     path blast_results
@@ -113,7 +113,7 @@ process getSequenceFiles {
 }
 
 process batchAlignSeqsAndConstructTrees {
-    cpus 2
+    label 'large_task'
 
     input:
     path in_files
@@ -155,7 +155,7 @@ process batchAlignSeqsAndConstructTrees {
 
 
 process splitDeepBranches {
-    cpus 2
+    label 'large_task'
 
     input:
     path _aln_results
@@ -249,7 +249,6 @@ process splitDeepBranches {
 
 
 process updateOrthogroupTable {
-    cpus 2
     publishDir "${params.out_dir}", mode: "copy", overwrite: true
 
     input:
